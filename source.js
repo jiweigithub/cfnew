@@ -1,5 +1,6 @@
 // CFnew - 终端 v2.9.6
 // 版本: v2.9.6
+//
 import { connect } from 'cloudflare:sockets';
 let at = '351c9981-04b6-4103-aa4b-864aa9c91469';
 let dp = '';  // 面板路径
