@@ -1,3 +1,7 @@
 name = "cfnew"
 main = "_worker.js"
 compatibility_date = "2026-01-20"
+
+[[kv_namespaces]]
+binding = "C"
+id = "e8f76a2c098f4385bcea3d389890eb10"
