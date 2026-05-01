@@ -35,12 +35,16 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: |
+          ls -la *.js 2>/dev/null || true
+          ls -la | grep -i '明\|源\|光\|少年\|worker'
+          FILE=$(ls | grep -E '^\346\230\216|^明' | head -1)
+          echo "Detected source file: $FILE"
           cat > obfuscate.js << 'EOF'
           const JavaScriptObfuscator = require('javascript-obfuscator');
           const fs = require('fs');
           const path = require('path');
-          
-          const sourceFileName = '明文源吗';
+
+          const sourceFileName = process.env.SOURCE_FILE || '明文源吗';
           const outputFileName = '少年你相信光吗';
           const sourceFilePath = path.join(process.cwd(), sourceFileName);
 
@@ -95,7 +99,7 @@ jobs:
           fs.writeFileSync(path.join(process.cwd(), outputFileName), obfuscatedCode, 'utf8');
           console.log('成功将 \'' + sourceFileName + '\' 混淆并保存至 \'' + outputFileName + '\'。');
           EOF
-          node obfuscate.js
+          SOURCE_FILE="$FILE" node obfuscate.js
 
       - name: Copy to _worker.js for Cloudflare Pages
         run: cp '少年你相信光吗' _worker.js
