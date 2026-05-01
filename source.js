@@ -414,7 +414,7 @@ export default {
                     const authCookie = cookies.find(c => c.startsWith('cfnew_auth='));
                     let hasValidSession = false;
                     if (authCookie) {
-                        const cookieHash = authCookie.split('=')[1];
+                        const cookieHash = authCookie.slice('cfnew_auth='.length);
                         hasValidSession = (cookieHash === await hashPw(pw));
                     }
                     if (!hasValidSession) {
