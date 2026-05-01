@@ -1,7 +1,10 @@
     // CFnew - 终端 v2.9.6
-    // 版本: v2.9.6 
+    // 版本: v2.9.6
     import { connect } from 'cloudflare:sockets';
     let at = '351c9981-04b6-4103-aa4b-864aa9c91469';
+    let dp = '';  // 面板路径
+    let pw = '';  // 面板密码
+    let st = '';  // 订阅凭证
     let fallbackAddress = '';
     let socks5Config = '';
     let customPreferredIPs = [];
@@ -229,6 +232,21 @@
         }
     }
 
+    async function hashPw(p) {
+        const enc = new TextEncoder();
+        const hash = await crypto.subtle.digest('SHA-256', enc.encode(p + 'cfnew_salt'));
+        return btoa(String.fromCharCode(...new Uint8Array(hash)));
+    }
+
+    function renderLogin(isFarsi) {
+        const t = isFarsi ? {
+            title: 'ورود', password: 'رمز عبور', submit: 'ورود', wrong: 'رمز اشتباه است',
+        } : {
+            title: '面板登录', password: '面板密码', submit: '登录', wrong: '',
+        };
+        return `<!DOCTYPE html><html lang="${isFarsi ? 'fa' : 'zh'}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${t.title}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0a0a0a;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:'Courier New',monospace}.box{background:rgba(0,20,0,0.6);border:2px solid #00ff00;padding:40px;text-align:center;max-width:400px;width:90%}.box h2{color:#00ff00;margin-bottom:20px;text-shadow:0 0 10px #00ff00}.box input{width:100%;padding:12px;background:rgba(0,0,0,0.8);border:2px solid #00ff00;color:#00ff00;font-family:'Courier New',monospace;font-size:16px;margin-bottom:15px;outline:none}.box input:focus{box-shadow:0 0 10px #00ff00}.box button{width:100%;padding:12px;background:rgba(0,255,0,0.15);border:2px solid #00ff00;color:#00ff00;font-size:16px;cursor:pointer;font-family:'Courier New',monospace}.box button:hover{background:rgba(0,255,0,0.3)}.err{color:#ff4444;margin-top:10px;display:none}</style></head><body><div class="box"><h2>${t.title}</h2><form id="f" method="post"><input type="password" id="p" name="pw" placeholder="${t.password}" autofocus><button type="submit">${t.submit}</button><p class="err" id="err">${t.wrong}</p></form></div><script>document.getElementById('f').addEventListener('submit',async function(e){e.preventDefault();const r=await fetch(window.location.pathname+'/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'pw='+encodeURIComponent(document.getElementById('p').value)});if(r.ok){window.location.reload()}else{document.getElementById('err').style.display='block'}});</script></body></html>`;
+    }
+
     async function checkIPAvailability(domain, port = 443, timeout = 2000) {
         try {
             const controller = new AbortController();
@@ -342,12 +360,19 @@
                 const reqUrl = new URL(request.url);
                 const pathSegments = reqUrl.pathname.split('/').filter(p => p);
 
-                if (!isWebSocket && !isPost && reqUrl.pathname !== '/') {
-                    const tmpAt = (env.u || env.U || '').toLowerCase();
-                    const tmpCp = (env.d || env.D || '').toLowerCase();
-                    const firstSeg = pathSegments[0] || '';
-                    const cleanCp = tmpCp.startsWith('/') ? tmpCp.substring(1) : tmpCp;
-                    if (firstSeg !== tmpAt && (cleanCp ? firstSeg !== cleanCp : false)) {
+                // --- 路由门禁 ---
+                const tmpSt = (env.st || env.ST || '').toLowerCase();
+                const tmpDp = (env.d || env.D || 'dashboard').toLowerCase();
+                const cleanDp = tmpDp.startsWith('/') ? tmpDp.substring(1) : tmpDp;
+
+                if (!isWebSocket && !isPost) {
+                    if (reqUrl.pathname === '/') {
+                        return Response.redirect(`${reqUrl.origin}/${cleanDp}`, 302);
+                    }
+                    const firstSeg = (pathSegments[0] || '').toLowerCase();
+                    const isDashboard = firstSeg === cleanDp;
+                    const isSubscription = tmpSt && firstSeg === tmpSt && pathSegments.length === 2 && pathSegments[1] === 'sub';
+                    if (!isDashboard && !isSubscription) {
                         return new Response('Not Found', { status: 404 });
                     }
                 }
@@ -355,7 +380,50 @@
                 await initKVStore(env);
 
                 at = (env.u || env.U || at).toLowerCase();
-                const subPath = (env.d || env.D || at).toLowerCase();
+                dp = getConfigValue('d', env.d || env.D) || 'dashboard';
+                st = getConfigValue('st', env.st || env.ST) || '';
+                pw = getConfigValue('pw', env.pw || env.PW) || '';
+
+                // --- 面板密码验证 ---
+                const firstSeg2 = (pathSegments[0] || '').toLowerCase();
+                const cleanDp2 = dp.startsWith('/') ? dp.substring(1) : dp;
+                const isDashboard = firstSeg2 === cleanDp2;
+                const isLoginPage = reqUrl.pathname.endsWith('/login');
+
+                if (isDashboard && pw && !isWebSocket && !isLoginPage) {
+                    const cookies = (request.headers.get('Cookie') || '').split(';').map(c => c.trim());
+                    const authCookie = cookies.find(c => c.startsWith('cfnew_auth='));
+                    let hasValidSession = false;
+                    if (authCookie) {
+                        const cookieHash = authCookie.split('=')[1];
+                        hasValidSession = (cookieHash === await hashPw(pw));
+                    }
+
+                    if (!hasValidSession) {
+                        if (request.method === 'POST' && isLoginPage) {
+                            const body = await request.text();
+                            const params = new URLSearchParams(body);
+                            if (params.get('pw') === pw) {
+                                const authHash = await hashPw(pw);
+                                return new Response(JSON.stringify({ ok: true }), {
+                                    status: 200,
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                        'Set-Cookie': `cfnew_auth=${authHash}; Path=/${cleanDp2}; HttpOnly; SameSite=Strict; Max-Age=86400`
+                                    }
+                                });
+                            }
+                            return new Response(JSON.stringify({ ok: false, error: '密码错误' }), { status: 401,
+                                headers: { 'Content-Type': 'application/json' } });
+                        }
+                        const acceptLang = request.headers.get('Accept-Language') || '';
+                        const isFa = acceptLang.includes('fa-IR') || acceptLang.includes('fa') || acceptLang.split(',')[0].startsWith('fa');
+                        return new Response(renderLogin(isFa), {
+                            status: 200,
+                            headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                        });
+                    }
+                }
 
                 const ci = getConfigValue('p', env.p || env.P);
                 let useCustomIP = false;
@@ -534,13 +602,8 @@
                         const pathSegments = pathParts.slice(0, apiIndex);
                         const pathIdentifier = pathSegments.join('/');
                         
-                    let isValid = false;
-                    if (cp && cp.trim()) {
-                        const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim().substring(1) : cp.trim();
-                        isValid = (pathIdentifier === cleanCustomPath);
-                        } else {
-                            isValid = (isValidFormat(pathIdentifier) && pathIdentifier === at);
-                        }
+                    const cleanDp = dp.startsWith('/') ? dp.substring(1) : dp;
+                    const isValid = (pathIdentifier === cleanDp);
 
                         if (isValid) {
                             return await handleConfigAPI(request);
@@ -566,12 +629,8 @@
                         const pathIdentifier = pathSegments.join('/');
 
                         let isValid = false;
-                        if (cp && cp.trim()) {
-                            const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim().substring(1) : cp.trim();
-                            isValid = (pathIdentifier === cleanCustomPath);
-                        } else {
-                            isValid = (isValidFormat(pathIdentifier) && pathIdentifier === at);
-                        }
+                        const cleanDp = dp.startsWith('/') ? dp.substring(1) : dp;
+                        isValid = (pathIdentifier === cleanDp);
 
                         if (isValid) {
                             return await handlePreferredIPsAPI(request);
@@ -617,16 +676,8 @@
 
                         if (pathParts.length === 2 && pathParts[1] === 'region') {
                             const pathIdentifier = pathParts[0];
-                            let isValid = false;
-
-                            if (cp && cp.trim()) {
-                                // 使用自定义路径
-                                const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim().substring(1) : cp.trim();
-                                isValid = (pathIdentifier === cleanCustomPath);
-                            } else {
-                                // 使用UUID路径
-                                isValid = (isValidFormat(pathIdentifier) && pathIdentifier === at);
-                            }
+                            const cleanDp = dp.startsWith('/') ? dp.substring(1) : dp;
+                        const isValid = (pathIdentifier === cleanDp);
 
                             if (isValid) {
                                 const ci = getConfigValue('p', env.p || env.P);
@@ -677,16 +728,8 @@
 
                         if (pathParts.length === 2 && pathParts[1] === 'test-api') {
                             const pathIdentifier = pathParts[0];
-                            let isValid = false;
-
-                            if (cp && cp.trim()) {
-                                // 使用自定义路径
-                                const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim().substring(1) : cp.trim();
-                                isValid = (pathIdentifier === cleanCustomPath);
-                            } else {
-                                // 使用UUID路径
-                                isValid = (isValidFormat(pathIdentifier) && pathIdentifier === at);
-                            }
+                            const cleanDp = dp.startsWith('/') ? dp.substring(1) : dp;
+                        const isValid = (pathIdentifier === cleanDp);
 
                             if (isValid) {
                                 try {
@@ -1186,67 +1229,22 @@
     </html>`;
             return new Response(terminalHtml, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
         }
-            if (cp && cp.trim()) {
-                const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim() : '/' + cp.trim();
-                const normalizedCustomPath = cleanCustomPath.endsWith('/') && cleanCustomPath.length > 1 ? cleanCustomPath.slice(0, -1) : cleanCustomPath;
-                const normalizedPath = url.pathname.endsWith('/') && url.pathname.length > 1 ? url.pathname.slice(0, -1) : url.pathname;
+            const cleanD = dp.startsWith('/') ? dp.substring(1) : dp;
+            const normPath = url.pathname.endsWith('/') && url.pathname.length > 1 ? url.pathname.slice(0, -1) : url.pathname;
 
-                    if (normalizedPath === normalizedCustomPath) {
-                        return await handleSubscriptionPage(request, at);
-                    }
+            // 面板: /{d}
+            if (normPath === '/' + cleanD) {
+                return await handleSubscriptionPage(request, at);
+            }
 
-                    if (normalizedPath === normalizedCustomPath + '/sub') {
-                        return await handleSubscriptionRequest(request, at, url);
-                    }
-
-                    if (url.pathname.length > 1 && url.pathname !== '/') {
-                        const user = url.pathname.replace(/\/$/, '').replace('/sub', '').substring(1);
-                        if (isValidFormat(user)) {
-                            return new Response(JSON.stringify({ 
-                                error: '访问被拒绝',
-                                message: '当前 Worker 已启用自定义路径模式，UUID 访问已禁用'
-                            }), { 
-                                status: 403,
-                                headers: { 'Content-Type': 'application/json' }
-                            });
-                        }
-                    }
-                } else {
-                    
-                    if (url.pathname.length > 1 && url.pathname !== '/' && !url.pathname.includes('/sub')) {
-                        const user = url.pathname.replace(/\/$/, '').substring(1);
-                        if (isValidFormat(user)) {
-                            if (user === at) {
-                                return await handleSubscriptionPage(request, user);
-                            } else {
-                                return new Response(JSON.stringify({ error: 'UUID错误 请注意变量名称是u不是uuid' }), { 
-                                    status: 403,
-                                    headers: { 'Content-Type': 'application/json' }
-                                });
-                            }
-                        }
-                    }
-                    if (url.pathname.includes('/sub')) {
-                        const pathParts = url.pathname.split('/');
-                        if (pathParts.length === 2 && pathParts[1] === 'sub') {
-                            const user = pathParts[0].substring(1);
-                            if (isValidFormat(user)) {
-                                if (user === at) {
-                                    return await handleSubscriptionRequest(request, user, url);
-                                } else {
-                                    return new Response(JSON.stringify({ error: 'UUID错误' }), { 
-                                        status: 403,
-                                        headers: { 'Content-Type': 'application/json' }
-                                    });
-                                }
-                                }
-                            }
-                        }
-                    }
-                    if (url.pathname.toLowerCase().includes(`/${subPath}`)) {
-                        return await handleSubscriptionRequest(request, at);
-                    }
+            // 订阅: /{st}/sub 优先，/{d}/sub 兜底
+            if (normPath.endsWith('/sub')) {
+                const subToken = normPath.replace('/sub', '').substring(1);
+                const cleanSt = (st || '').startsWith('/') ? st.substring(1) : (st || '');
+                if ((cleanSt && subToken === cleanSt) || subToken === cleanD) {
+                    return await handleSubscriptionRequest(request, at, url);
                 }
+            }
                 return new Response(JSON.stringify({ error: 'Not Found' }), { 
                     status: 404,
                     headers: { 'Content-Type': 'application/json' }
@@ -3055,6 +3053,29 @@
                             <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">${t.saveConfig}</button>
                     </form>
 
+                    <h3 style="color: #ff6600; margin: 20px 0 15px 0; font-size: 1.2rem;">🔒 ${isFarsi ? 'تنظیمات امنیتی' : '安全配置'}</h3>
+                    <form id="securityConfigForm" style="margin-bottom: 20px; border: 2px solid #ff6600; padding: 15px; background: rgba(30, 10, 0, 0.4);">
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: block; margin-bottom: 8px; color: #ffaa00; font-weight: bold;">${isFarsi ? 'مسیر داشبورد (d)' : '面板路径 (d)'}</label>
+                            <input type="text" id="dpath" placeholder="${isFarsi ? 'پیش‌فرض: dashboard' : '默认: dashboard'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #ffaa00; color: #ffaa00; font-family: 'Courier New', monospace; font-size: 14px;">
+                            <small style="color: #cc8800; font-size: 0.85rem;">${isFarsi ? 'مسیر دسترسی به داشبورد مدیریت' : '管理面板的访问路径，留空默认为 /dashboard'}</small>
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: block; margin-bottom: 8px; color: #ffaa00; font-weight: bold;">${isFarsi ? 'رمز عبور داشبورد (pw)' : '面板密码 (pw)'}</label>
+                            <input type="password" id="pwconfig" placeholder="${isFarsi ? 'رمز عبور برای داشبورد' : '设置面板登录密码'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #ffaa00; color: #ffaa00; font-family: 'Courier New', monospace; font-size: 14px;">
+                            <small style="color: #cc8800; font-size: 0.85rem;">${isFarsi ? 'برای دسترسی به داشبورد نیاز به رمز عبور است' : '设置后访问面板需要输入密码，留空则不启用密码'}</small>
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: block; margin-bottom: 8px; color: #ffaa00; font-weight: bold;">${isFarsi ? 'توکن اشتراک (st)' : '订阅凭证 (st)'}</label>
+                            <div style="display: flex; gap: 10px;">
+                                <input type="text" id="stconfig" placeholder="${isFarsi ? 'توکن اشتراک' : '留空则使用面板路径'}" style="flex: 1; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #ffaa00; color: #ffaa00; font-family: 'Courier New', monospace; font-size: 14px;" readonly>
+                                <button type="button" onclick="regenerateSt()" style="background: rgba(255, 100, 0, 0.2); border: 2px solid #ff6600; padding: 12px 20px; color: #ff6600; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; white-space: nowrap;">🔄 ${isFarsi ? 'تولید مجدد' : '重新生成'}</button>
+                            </div>
+                            <small id="stUrlDisplay" style="color: #ffaa00; font-size: 0.85rem; display: block; margin-top: 5px;"></small>
+                        </div>
+                        <button type="submit" style="background: rgba(255, 100, 0, 0.15); border: 2px solid #ff6600; padding: 12px 24px; color: #ff6600; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer;">${t.saveConfig}</button>
+                    </form>
+
                     <h3 style="color: #00ff00; margin: 20px 0 15px 0; font-size: 1.2rem;">${t.advancedControl}</h3>
                     <form id="advancedConfigForm" style="margin-bottom: 20px;">
                         <div style="margin-bottom: 15px;">
@@ -3192,9 +3213,9 @@
             </div>
         </div>
         <script>
-            // 订阅转换地址（从服务器配置注入）
+            // 服务器配置注入
             var SUB_CONVERTER_URL = "${ scu }";
-            // 远程配置URL（硬编码）
+            var SUB_TOKEN = "${ st }";
             var REMOTE_CONFIG_URL = "${ remoteConfigUrl }";
 
             // 翻译对象
@@ -3315,7 +3336,9 @@
 
             function generateClientLink(clientType, clientName) {
                 var currentUrl = window.location.href;
-                var subscriptionUrl = currentUrl + "/sub";
+                var subscriptionUrl = SUB_TOKEN
+                    ? (currentUrl.split('/')[0] + '//' + currentUrl.split('/')[2]) + '/' + SUB_TOKEN + '/sub'
+                    : currentUrl + "/sub";
                 var schemeUrl = '';
                 var displayName = clientName || '';
                 var finalUrl = subscriptionUrl;
@@ -3911,6 +3934,16 @@
                         document.getElementById('customECHDomain').value = config.customECHDomain || '';
                     }
                     document.getElementById('scu').value = config.scu || '';
+                    if (document.getElementById('dpath')) {
+                        document.getElementById('dpath').value = config.d || '';
+                    }
+                    if (document.getElementById('pwconfig')) {
+                        document.getElementById('pwconfig').value = config.pw || '';
+                    }
+                    if (document.getElementById('stconfig')) {
+                        document.getElementById('stconfig').value = config.st || '';
+                        if (config.st) updateStDisplay(config.st);
+                    }
                     document.getElementById('ena').checked = config.ena === 'yes';
                     document.getElementById('epd').checked = config.epd !== 'no';
                     document.getElementById('epi').checked = config.epi !== 'no';
@@ -3949,19 +3982,14 @@
                 const currentUrl = window.location.href;
                 const pathParts = window.location.pathname.split('/').filter(p => p);
                 const currentPath = pathParts.length > 0 ? pathParts[0] : '';
-
-                if (cp && cp.trim()) {
-                    // 使用自定义路径 (d)
-                    pathTypeStatus.innerHTML = '<div style="color: #44ff44;">使用类型: <strong>自定义路径 (d)</strong></div>' +
-                        '<div style="margin-top: 5px; color: #00ff00;">当前路径: <span style="color: #ffaa00;">' + cp + '</span></div>' +
-                        '<div style="margin-top: 5px; font-size: 0.9rem; color: #00aa00;">访问地址: ' + 
-                        (currentUrl.split('/')[0] + '//' + currentUrl.split('/')[2]) + cp + '/sub</div>';
-                } else {
-                    // 使用 UUID (u)
-                    pathTypeStatus.innerHTML = '<div style="color: #44ff44;">使用类型: <strong>UUID 路径 (u)</strong></div>' +
-                        '<div style="margin-top: 5px; color: #00ff00;">当前路径: <span style="color: #ffaa00;">' + (currentPath || '(UUID)') + '</span></div>' +
-                        '<div style="margin-top: 5px; font-size: 0.9rem; color: #00aa00;">访问地址: ' + currentUrl.split('/sub')[0] + '/sub</div>';
+                const dpPath = (currentPath && currentPath !== '') ? currentPath : 'dashboard';
+                const baseUrl = currentUrl.split('/')[0] + '//' + currentUrl.split('/')[2];
+                var html = '<div style="color: #44ff44;">面板路径: <strong>' + dpPath + '</strong></div>';
+                html += '<div style="margin-top: 5px; font-size: 0.9rem; color: #00aa00;">面板地址: ' + baseUrl + '/' + dpPath + '</div>';
+                if (SUB_TOKEN) {
+                    html += '<div style="margin-top: 5px; font-size: 0.9rem; color: #00ff00;">订阅地址: ' + baseUrl + '/' + SUB_TOKEN + '/sub</div>';
                 }
+                pathTypeStatus.innerHTML = html;
             }
 
             // 更新wk地区选择的启用/禁用状态
@@ -4239,11 +4267,59 @@
                     });
                 }
 
+                // 安全配置表单
+                const securityConfigForm = document.getElementById('securityConfigForm');
+                if (securityConfigForm) {
+                    securityConfigForm.addEventListener('submit', async function(e) {
+                        e.preventDefault();
+                        const configData = {
+                            d: document.getElementById('dpath').value,
+                            pw: document.getElementById('pwconfig').value,
+                            st: document.getElementById('stconfig').value
+                        };
+                        await saveConfig(configData);
+                        if (configData.st) updateStDisplay(configData.st);
+                        // 更新主页面订阅链接变量
+                        window.SUB_TOKEN = configData.st;
+                        alert('安全配置已保存' + (configData.st ? '，订阅链接已更新' : ''));
+                        window.location.reload();
+                    });
+                }
+
+                // 重新生成订阅凭证
+                window.regenerateSt = function() {
+                    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+                    var token = '';
+                    for (var i = 0; i < 16; i++) {
+                        token += chars[Math.floor(Math.random() * chars.length)];
+                    }
+                    document.getElementById('stconfig').value = token;
+                    updateStDisplay(token);
+                };
+
+                // 更新订阅地址显示
+                window.updateStDisplay = function(token) {
+                    const el = document.getElementById('stUrlDisplay');
+                    if (el && token) {
+                        const baseUrl = window.location.origin;
+                        el.textContent = '订阅地址: ' + baseUrl + '/' + token + '/sub';
+                    }
+                };
+
+                // 初始化显示
+                if (document.getElementById('stconfig') && document.getElementById('stconfig').value) {
+                    updateStDisplay(document.getElementById('stconfig').value);
+                }
+
                 const advancedConfigForm = document.getElementById('advancedConfigForm');
                 if (advancedConfigForm) {
                     advancedConfigForm.addEventListener('submit', async function(e) {
                         e.preventDefault();
-                        const configData = { scu: document.getElementById('scu').value, ena: document.getElementById('ena').checked ? 'yes' : 'no', epd: document.getElementById('epd').checked ? 'yes' : 'no', epi: document.getElementById('epi').checked ? 'yes' : 'no', egi: document.getElementById('egi').checked ? 'yes' : 'no', ae: document.getElementById('apiEnabled').value,
+                        const configData = {
+                            d: document.getElementById('dpath').value,
+                            pw: document.getElementById('pwconfig').value,
+                            st: document.getElementById('stconfig').value,
+                            scu: document.getElementById('scu').value, ena: document.getElementById('ena').checked ? 'yes' : 'no', epd: document.getElementById('epd').checked ? 'yes' : 'no', epi: document.getElementById('epi').checked ? 'yes' : 'no', egi: document.getElementById('egi').checked ? 'yes' : 'no', ae: document.getElementById('apiEnabled').value,
                             rm: document.getElementById('regionMatching').value,
                             qj: document.getElementById('downgradeControl').value,
                             dkby: document.getElementById('portControl').value,
