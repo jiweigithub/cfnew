@@ -1,4 +1,4 @@
-name: Generate and Obfuscate Worker Script
+name: Obfuscate and Deploy
 
 on:
   workflow_dispatch:
@@ -31,84 +31,53 @@ jobs:
       - name: Install Obfuscator
         run: npm install javascript-obfuscator
 
-      - name: Obfuscate from local source file
+      - name: Obfuscate source.js -> worker.js
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: |
-          ls -la *.js 2>/dev/null || true
-          ls -la | grep -i '明\|源\|光\|少年\|worker'
-          FILE=$(ls | grep -E '^\346\230\216|^明' | head -1)
-          echo "Detected source file: $FILE"
-          cat > obfuscate.js << 'EOF'
+          node -e "
           const JavaScriptObfuscator = require('javascript-obfuscator');
           const fs = require('fs');
-          const path = require('path');
 
-          const sourceFileName = process.env.SOURCE_FILE || '明文源吗';
-          const outputFileName = '少年你相信光吗';
-          const sourceFilePath = path.join(process.cwd(), sourceFileName);
+          const code = fs.readFileSync('source.js', 'utf8');
+          const result = JavaScriptObfuscator.obfuscate(code, {
+            compact: true,
+            controlFlowFlattening: false,
+            deadCodeInjection: false,
+            stringArray: true,
+            stringArrayEncoding: ['base64'],
+            stringArrayThreshold: 1.0,
+            stringArrayRotate: true,
+            stringArrayShuffle: true,
+            stringArrayWrappersCount: 2,
+            stringArrayWrappersChainedCalls: false,
+            renameGlobals: true,
+            identifierNamesGenerator: 'mangled-shuffled',
+            renameProperties: false,
+            ignoreImports: false,
+            target: 'browser',
+            numbersToExpressions: false,
+            simplify: false,
+            splitStrings: true,
+            splitStringsChunkLength: 3,
+            transformObjectKeys: false,
+            unicodeEscapeSequence: false,
+            selfDefending: false,
+            debugProtection: false,
+            disableConsoleOutput: true
+          });
+          fs.writeFileSync('worker.js', result.getObfuscatedCode(), 'utf8');
+          console.log('Obfuscation complete: source.js -> worker.js');
+          "
 
-          if (!fs.existsSync(sourceFilePath)) {
-            console.error('错误：在路径 \'' + sourceFilePath + '\' 未找到源文件。请确保您的仓库根目录有名为 \'明文源吗\' 的文件。');
-            process.exit(1);
-          }
-
-          const originalCode = fs.readFileSync(sourceFilePath, 'utf8');
-
-          if (!originalCode || originalCode.trim().length === 0) {
-            console.error('错误：源文件 ' + sourceFileName + ' 为空。');
-            process.exit(1);
-          }
-
-          const obfuscationOptions = {
-              compact: true,
-              controlFlowFlattening: false,
-              controlFlowFlatteningThreshold: 0,
-              deadCodeInjection: false,
-              stringArray: true,
-              stringArrayEncoding: ['base64'],
-              stringArrayThreshold: 1.0,
-              stringArrayRotate: true,
-              stringArrayShuffle: true,
-              stringArrayWrappersCount: 2,
-              stringArrayWrappersChainedCalls: false,
-              stringArrayWrappersParametersMaxCount: 3,
-              renameGlobals: true,
-              identifierNamesGenerator: 'mangled-shuffled',
-              identifierNamesCache: null,
-              identifiersPrefix: '',
-              renameProperties: false,
-              renamePropertiesMode: 'safe',
-              ignoreImports: false,
-              target: 'browser',
-              numbersToExpressions: false,
-              simplify: false,
-              splitStrings: true,
-              splitStringsChunkLength: 3,
-              transformObjectKeys: false,
-              unicodeEscapeSequence: false,
-              selfDefending: false,
-              debugProtection: false,
-              debugProtectionInterval: 0,
-              disableConsoleOutput: true,
-              domainLock: []
-          };
-
-          const obfuscatedCode = JavaScriptObfuscator.obfuscate(originalCode, obfuscationOptions).getObfuscatedCode();
-          
-          fs.writeFileSync(path.join(process.cwd(), outputFileName), obfuscatedCode, 'utf8');
-          console.log('成功将 \'' + sourceFileName + '\' 混淆并保存至 \'' + outputFileName + '\'。');
-          EOF
-          SOURCE_FILE="$FILE" node obfuscate.js
-
-      - name: Copy to _worker.js for Cloudflare Pages
-        run: cp '少年你相信光吗' _worker.js
+      - name: Copy worker.js to _worker.js
+        run: cp worker.js _worker.js
 
       - name: Commit and push
         run: |
           git config --global user.name 'GitHub Actions Bot'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add '少年你相信光吗' _worker.js wrangler.toml
+          git add worker.js _worker.js wrangler.toml
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
