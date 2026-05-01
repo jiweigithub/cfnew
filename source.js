@@ -360,23 +360,6 @@
                 const reqUrl = new URL(request.url);
                 const pathSegments = reqUrl.pathname.split('/').filter(p => p);
 
-                // --- 路由门禁 ---
-                const tmpSt = (env.st || env.ST || '').toLowerCase();
-                const tmpDp = (env.d || env.D || 'dashboard').toLowerCase();
-                const cleanDp = tmpDp.startsWith('/') ? tmpDp.substring(1) : tmpDp;
-
-                if (!isWebSocket && !isPost) {
-                    if (reqUrl.pathname === '/') {
-                        return Response.redirect(`${reqUrl.origin}/${cleanDp}`, 302);
-                    }
-                    const firstSeg = (pathSegments[0] || '').toLowerCase();
-                    const isDashboard = firstSeg === cleanDp;
-                    const isSubscription = tmpSt && firstSeg === tmpSt && pathSegments.length === 2 && pathSegments[1] === 'sub';
-                    if (!isDashboard && !isSubscription) {
-                        return new Response('Not Found', { status: 404 });
-                    }
-                }
-
                 await initKVStore(env);
 
                 at = (env.u || env.U || at).toLowerCase();
@@ -384,10 +367,24 @@
                 st = getConfigValue('st', env.st || env.ST) || '';
                 pw = getConfigValue('pw', env.pw || env.PW) || '';
 
+                // --- 路由门禁 ---
+                const cleanDp = dp.startsWith('/') ? dp.substring(1) : dp;
+
+                if (!isWebSocket && !isPost) {
+                    if (reqUrl.pathname === '/') {
+                        return Response.redirect(`${reqUrl.origin}/${cleanDp}`, 302);
+                    }
+                    const firstSeg = (pathSegments[0] || '').toLowerCase();
+                    const isDashboard = firstSeg === cleanDp;
+                    const isSubscription = st && firstSeg === st && pathSegments.length === 2 && pathSegments[1] === 'sub';
+                    if (!isDashboard && !isSubscription) {
+                        return new Response('Not Found', { status: 404 });
+                    }
+                }
+
                 // --- 面板密码验证 ---
                 const firstSeg2 = (pathSegments[0] || '').toLowerCase();
-                const cleanDp2 = dp.startsWith('/') ? dp.substring(1) : dp;
-                const isDashboard = firstSeg2 === cleanDp2;
+                const isDashboard = firstSeg2 === cleanDp;
                 const isLoginPage = reqUrl.pathname.endsWith('/login');
 
                 if (isDashboard && pw && !isWebSocket && !isLoginPage) {
@@ -409,7 +406,7 @@
                                     status: 200,
                                     headers: {
                                         'Content-Type': 'application/json',
-                                        'Set-Cookie': `cfnew_auth=${authHash}; Path=/${cleanDp2}; HttpOnly; SameSite=Strict; Max-Age=86400`
+                                        'Set-Cookie': `cfnew_auth=${authHash}; Path=/${cleanDp}; HttpOnly; SameSite=Strict; Max-Age=86400`
                                     }
                                 });
                             }
