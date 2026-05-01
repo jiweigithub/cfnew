@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - '**'
+    paths:
+      - 'source.js'
+      - 'wrangler.toml'
 
 jobs:
   build-and-obfuscate:
