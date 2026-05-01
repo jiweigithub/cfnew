@@ -387,34 +387,46 @@ export default {
             const isDashboard = firstSeg2 === cleanDp;
             const isLoginPage = reqUrl.pathname.endsWith('/login');
 
-            if (isDashboard && pw && !isWebSocket && !isLoginPage) {
-                const cookies = (request.headers.get('Cookie') || '').split(';').map(c => c.trim());
-                const authCookie = cookies.find(c => c.startsWith('cfnew_auth='));
-                let hasValidSession = false;
-                if (authCookie) {
-                    const cookieHash = authCookie.split('=')[1];
-                    hasValidSession = (cookieHash === await hashPw(pw));
-                }
-
-                if (!hasValidSession) {
-                    if (request.method === 'POST' && isLoginPage) {
-                        const body = await request.text();
-                        const params = new URLSearchParams(body);
-                        if (params.get('pw') === pw) {
-                            const authHash = await hashPw(pw);
-                            return new Response(JSON.stringify({ ok: true }), {
-                                status: 200,
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    'Set-Cookie': `cfnew_auth=${authHash}; Path=/${cleanDp}; HttpOnly; SameSite=Strict; Max-Age=86400`
-                                }
-                            });
-                        }
-                        return new Response(JSON.stringify({ ok: false, error: '密码错误' }), {
-                            status: 401,
-                            headers: { 'Content-Type': 'application/json' }
+            if (isDashboard && pw && !isWebSocket) {
+                // 登录 POST 优先处理
+                if (request.method === 'POST' && isLoginPage) {
+                    const body = await request.text();
+                    const params = new URLSearchParams(body);
+                    if (params.get('pw') === pw) {
+                        const authHash = await hashPw(pw);
+                        return new Response(JSON.stringify({ ok: true }), {
+                            status: 200,
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Set-Cookie': `cfnew_auth=${authHash}; Path=/${cleanDp}; HttpOnly; SameSite=Strict; Max-Age=86400`
+                            }
                         });
                     }
+                    return new Response(JSON.stringify({ ok: false, error: '密码错误' }), {
+                        status: 401,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+
+                // Cookie 校验 (非登录页)
+                if (!isLoginPage) {
+                    const cookies = (request.headers.get('Cookie') || '').split(';').map(c => c.trim());
+                    const authCookie = cookies.find(c => c.startsWith('cfnew_auth='));
+                    let hasValidSession = false;
+                    if (authCookie) {
+                        const cookieHash = authCookie.split('=')[1];
+                        hasValidSession = (cookieHash === await hashPw(pw));
+                    }
+                    if (!hasValidSession) {
+                        const acceptLang = request.headers.get('Accept-Language') || '';
+                        const isFa = acceptLang.includes('fa-IR') || acceptLang.includes('fa') || acceptLang.split(',')[0].startsWith('fa');
+                        return new Response(renderLogin(isFa), {
+                            status: 200,
+                            headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                        });
+                    }
+                } else {
+                    // GET /login: 渲染登录表单
                     const acceptLang = request.headers.get('Accept-Language') || '';
                     const isFa = acceptLang.includes('fa-IR') || acceptLang.includes('fa') || acceptLang.split(',')[0].startsWith('fa');
                     return new Response(renderLogin(isFa), {
