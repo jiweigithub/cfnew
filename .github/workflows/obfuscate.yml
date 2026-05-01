@@ -4,9 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - '**'  # 仅匹配分支推送，排除标签推送
-    paths:
-      - '明文源吗'
+      - '**'
 
 jobs:
   build-and-obfuscate:
@@ -15,6 +13,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Skip if auto-commit
+        run: |
+          if git log -1 --pretty=%B | grep -q '^部署用这个$'; then
+            echo "Auto-commit detected, skipping."
+            exit 78
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -25,6 +32,8 @@ jobs:
         run: npm install javascript-obfuscator
 
       - name: Obfuscate from local source file
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: |
           cat > obfuscate.js << 'EOF'
           const JavaScriptObfuscator = require('javascript-obfuscator');
@@ -71,9 +80,9 @@ jobs:
               numbersToExpressions: false,
               simplify: false,
               splitStrings: true,
-              splitStringsChunkLength: 1,
+              splitStringsChunkLength: 3,
               transformObjectKeys: false,
-              unicodeEscapeSequence: true,
+              unicodeEscapeSequence: false,
               selfDefending: false,
               debugProtection: false,
               debugProtectionInterval: 0,
