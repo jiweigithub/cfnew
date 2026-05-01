@@ -1245,10 +1245,11 @@
                     return await handleSubscriptionRequest(request, at, url);
                 }
             }
-                return new Response(JSON.stringify({ error: 'Not Found' }), { 
+                    return new Response(JSON.stringify({ error: 'Not Found' }), {
                     status: 404,
                     headers: { 'Content-Type': 'application/json' }
                 });
+                }
             } catch (err) {
                 return new Response(err.toString(), { status: 500 });
             }
